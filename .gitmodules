@@ -1,0 +1,3 @@
+[submodule "docs/ed3d"]
+	path = docs/ed3d
+	url = https://github.com/gbiobob/ED3D-Galaxy-Map.git
