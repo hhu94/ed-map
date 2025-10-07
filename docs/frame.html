@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base href="ed3d/" />
+    <meta charset="utf-8" />
+    <title>ED3D Map – Frame</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="css/styles.css" />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #000;
+      }
+      #edmap {
+        position: fixed;
+        inset: 0;
+      }
+      #edmap canvas,
+      #edmap .ed3d-ui {
+        pointer-events: auto;
+      }
+      #dbg {
+        position: fixed;
+        left: 8px;
+        bottom: 8px;
+        font: 12px/1.2 system-ui;
+        color: #9ec3ff;
+        opacity: 0.65;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="edmap"></div>
+    <div id="dbg"></div>
+
+    <script src="https://code.jquery.com/jquery-2.1.4.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r75/three.min.js"></script>
+    <script src="js/ed3dmap.min.js"></script>
+    <script src="../js/frame.js"></script>
+  </body>
+</html>
