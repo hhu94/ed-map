@@ -60,6 +60,7 @@ async function importCsvText(text, catNameBase, catIdBase) {
           y: +o.coords.y,
           z: +o.coords.z,
         };
+        systems[idx].infos = o.infos;
         addedCount++;
       }
     }
