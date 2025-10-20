@@ -1,3 +1,85 @@
+// --- Shared CSV import logic ---
+async function importCsvText(text, catNameBase, catIdBase) {
+  let addedCount = 0;
+  let catNameToId = {};
+  let systems = [];
+  // Parse CSV
+  const lines = text.split(/\r?\n/g).filter(Boolean);
+  let hasHeader = false;
+  if (lines.length && /name|system/i.test(lines[0])) hasHeader = true;
+  for (let i = hasHeader ? 1 : 0; i < lines.length; i++) {
+    const row = lines[i];
+    const cols = row.split(/,(?=(?:[^"]*\"[^"]*\")*[^"]*$)/);
+    if (cols.length < 1) continue;
+    const name = (cols[0] || "").replace(/(^[\"']|[\"']$)/g, "").trim();
+    if (!name) continue;
+    let catId, catName;
+    if (cols.length >= 2) {
+      catName = cols[1].trim();
+      if (catNameToId[catName] === undefined) {
+        catNameToId[catName] = nextFileCatId++;
+      }
+      catId = catNameToId[catName];
+    }
+    if (catId === undefined) {
+      catId = catIdBase;
+      catName = catNameBase;
+    }
+    // Parse manual coordinates if present (cols 2,3,4)
+    let coords = undefined;
+    if (cols.length >= 5) {
+      const x = parseFloat(cols[2]);
+      const y = parseFloat(cols[3]);
+      const z = parseFloat(cols[4]);
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        coords = { x, y, z };
+      }
+    }
+    systems.push(
+      coords
+        ? { name, cat: [catId], catName, coords }
+        : { name, cat: [catId], catName }
+    );
+  }
+  // Query EDSM only for systems without manual coordinates
+  const needCoords = systems.filter((s) => !s.coords);
+  if (needCoords.length) {
+    setStatus(`Querying EDSM for ${needCoords.length} systems…`);
+    const names = needCoords.map((s) => s.name);
+    const results = await edsmLoader.fetchSystemsFromEDSM(names, {}, (m) =>
+      setStatus(m)
+    );
+    const batch = edsmLoader.toEd3dSystems(results);
+    for (const o of batch) {
+      const idx = systems.findIndex(
+        (s) => !s.coords && s.name.toLowerCase() === o.name.toLowerCase()
+      );
+      if (idx >= 0 && o && o.name && hasFiniteCoords(o)) {
+        systems[idx].coords = {
+          x: +o.coords.x,
+          y: +o.coords.y,
+          z: +o.coords.z,
+        };
+        addedCount++;
+      }
+    }
+  } else {
+    // All systems had manual coordinates
+    addedCount = systems.length;
+  }
+  // Add to global state (dedup by name)
+  const existing = new Set(systemsState.map((s) => s.name.toLowerCase()));
+  for (const s of systems) {
+    if (!s.name) continue;
+    const key = s.name.toLowerCase();
+    if (existing.has(key)) continue;
+    existing.add(key);
+    systemsState.push(s);
+  }
+  // Return both addedCount and number of systems with missing coords
+  const missingCoords = systems.filter((s) => !hasFiniteCoords(s)).length;
+  return { addedCount, missingCoords };
+}
 const $status = document.getElementById("status");
 
 let systemsState = []; // [{ name, coords:{x,y,z}, cat:[id], catName:string, infos:"" }]
@@ -21,14 +103,8 @@ function hasFiniteCoords(s) {
 // Ensure Sol is always present at (0,0,0)
 // ed3d doesn't allow clicking on systems until there are at least 2 systems, so Sol helps avoid unclickable single-system states
 function ensureSolAnchor() {
-  const idx = systemsState.findIndex((s) => s?.name?.toLowerCase() === "sol");
-  if (idx >= 0) {
-    systemsState[idx].name = "Sol";
-    systemsState[idx].coords = { x: 0, y: 0, z: 0 };
-    systemsState[idx].cat = [3];
-    systemsState[idx].catName = "Sol";
-    systemsState[idx].infos = systemsState[idx].infos || "";
-  } else {
+  // Always ensure Sol is present
+  if (!systemsState.some((s) => s.name && s.name.toLowerCase() === "sol")) {
     systemsState.push({
       name: "Sol",
       coords: { x: 0, y: 0, z: 0 },
@@ -42,22 +118,6 @@ function ensureSolAnchor() {
 function buildPayload() {
   ensureSolAnchor();
 
-  const seen = new Set();
-  const systems = [];
-  for (const s of systemsState) {
-    if (!s || !s.name || !hasFiniteCoords(s)) continue;
-    const key = s.name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    systems.push({
-      name: s.name,
-      coords: { x: +s.coords.x, y: +s.coords.y, z: +s.coords.z },
-      cat: [Array.isArray(s.cat) && s.cat.length ? +s.cat[0] : 1],
-      infos: typeof s.infos === "string" ? s.infos : "",
-    });
-  }
-
-  const categories = { Sources: {} };
   const palette = [
     "4FC3F7",
     "A1887F",
@@ -70,30 +130,36 @@ function buildPayload() {
     "4DB6AC",
     "F06292",
   ];
+  const categories = { Sources: {} };
   let hasSearchedCategory = false;
-
+  const catIdToName = {};
   for (const s of systemsState) {
     if (!s || !Array.isArray(s.cat) || !s.cat.length) continue;
-    const idNum = +s.cat[0];
-    const id = String(idNum);
-
+    const idNum = parseInt(s.cat[0], 10);
+    if (isNaN(idNum)) continue;
     if (idNum === 3) continue;
     if (idNum === 4) {
       hasSearchedCategory = true;
       continue;
     }
-
+    if (!catIdToName[idNum])
+      catIdToName[idNum] = s.catName || `Category ${idNum}`;
+  }
+  // Now add categories to the legend
+  Object.entries(catIdToName).forEach(([id, label], idx) => {
     if (!categories.Sources[id]) {
-      const label = s.catName || `Category ${id}`;
-      const color = palette[idNum % palette.length];
+      const color = palette[idx % palette.length];
       categories.Sources[id] = { name: label, color };
     }
-  }
+  });
 
+  // Add Sol and Searched
   categories.Sources["3"] = { name: "Sol", color: "BBBBBB" };
   if (hasSearchedCategory)
     categories.Sources["4"] = { name: "Searched", color: "F7A14F" };
 
+  // Return all systems (with valid coords)
+  const systems = systemsState.filter(hasFiniteCoords);
   return { systems, categories };
 }
 
@@ -146,56 +212,34 @@ document
     const fileEl = event.target;
     const f = fileEl.files[0];
     if (!f) {
-      setStatus("Choose a .txt or .csv file first.");
+      setStatus("Choose a .csv file first.");
       return;
     }
 
-    const catId = nextFileCatId++;
-    const catName = f.name || `File ${catId}`;
+    const catIdBase = nextFileCatId++;
+    const catNameBase = f.name || `File ${catIdBase}`;
 
     try {
-      setStatus(`Reading ${catName}…`);
+      setStatus(`Reading ${catNameBase}…`);
       const text = await edsmLoader.readFileAsText(f);
-      const names = edsmLoader.extractNamesFromText(f.name, text);
-      if (!names.length) {
-        setStatus(`No system names found in ${catName}.`);
-        return;
+      const isCsv = String(f.name).toLowerCase().endsWith(".csv");
+      let importResult = { addedCount: 0, missingCoords: 0 };
+      if (isCsv) {
+        importResult = await importCsvText(text, catNameBase, catIdBase);
       }
-
-      setStatus(
-        `Querying EDSM for ${names.length} ${
-          names.length === 1 ? "system" : "systems"
-        }…`
-      );
-      const results = await edsmLoader.fetchSystemsFromEDSM(names, {}, (m) =>
-        setStatus(m)
-      );
-      const batch = edsmLoader.toEd3dSystems(results);
-
-      const existing = new Set(systemsState.map((s) => s.name.toLowerCase()));
-      let addedCount = 0;
-      for (const o of batch) {
-        if (!o || !o.name || !hasFiniteCoords(o)) continue;
-        const key = o.name.toLowerCase();
-        if (existing.has(key)) continue;
-        existing.add(key);
-        systemsState.push({
-          name: o.name,
-          coords: { x: +o.coords.x, y: +o.coords.y, z: +o.coords.z },
-          cat: [catId],
-          catName,
-          infos: typeof o.infos === "string" ? o.infos : "",
-        });
-        addedCount++;
-      }
-
       const com = getCenterOfMass();
       pendingCenterLabel = null;
-      setStatus(
-        `Imported ${addedCount} ${
-          addedCount === 1 ? "system" : "systems"
-        } from ${catName}. Centering & rendering…`
-      );
+      let msg = `Imported ${importResult.addedCount} systems from ${catNameBase}. Centering & rendering…`;
+      const rendered = systemsState.filter(hasFiniteCoords).length;
+      const missing = importResult.missingCoords;
+      msg =
+        `Rendered ${rendered} systems.` +
+        (missing > 0
+          ? ` Could not find coordinates for ${missing} system${
+              missing === 1 ? "" : "s"
+            }.`
+          : "");
+      setStatus(msg);
       plot(com);
     } catch (e) {
       console.error(e);
@@ -286,19 +330,80 @@ document.getElementById("searchInput").addEventListener("keydown", (e) => {
 window.addEventListener("message", (ev) => {
   const data = ev.data || {};
   if (data.type === "ed3d-bootstrapped") {
+    // Find systems missing coordinates
+    const missingSystems = systemsState.filter((s) => !hasFiniteCoords(s));
+    const missing = missingSystems.length;
+    let msg;
     if (data.centered && pendingCenterLabel) {
-      setStatus(
-        `Centered on ${pendingCenterLabel}. Rendered ${data.systems} ${
-          data.systems === 1 ? "system" : "systems"
-        }.`
-      );
+      msg = `Centered on ${pendingCenterLabel}. Rendered ${data.systems} ${
+        data.systems === 1 ? "system" : "systems"
+      }.`;
       pendingCenterLabel = null;
     } else {
-      setStatus(
-        `Rendered ${data.systems} ${data.systems === 1 ? "system" : "systems"}.`
-      );
+      msg = `Rendered ${data.systems} ${
+        data.systems === 1 ? "system" : "systems"
+      }.`;
+    }
+    let tooltip = "";
+    if (missing > 0) {
+      msg += ` <span id='missing-coords-msg'>Could not find coordinates for ${missing} system${
+        missing === 1 ? "" : "s"
+      }.</span>`;
+      // Build tooltip with missing system names
+      tooltip = missingSystems
+        .map((s) => s.name)
+        .filter(Boolean)
+        .join(", ");
+    }
+    $status.innerHTML = msg;
+    // Set tooltip if needed
+    if (missing > 0) {
+      const el = document.getElementById("missing-coords-msg");
+      if (el) el.title = tooltip;
     }
   }
 });
 
-plot(getCenterOfMass());
+// --- Auto-load CSV from ?load=FILENAME.csv query param ---
+async function tryAutoLoadCsvFromQuery() {
+  const params = new URLSearchParams(window.location.search);
+  const csvFile = params.get("load");
+  if (csvFile && /^[\w\-.]+\.csv$/i.test(csvFile)) {
+    setStatus(`Loading CSV: ${csvFile}…`);
+    try {
+      // Only allow files from system-sets directory
+      const url = `system-sets/${csvFile}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Failed to fetch ${csvFile}`);
+      const text = await resp.text();
+      const catIdBase = nextFileCatId++;
+      const catNameBase = csvFile;
+      const importResult = await importCsvText(text, catNameBase, catIdBase);
+      const com = getCenterOfMass();
+      pendingCenterLabel = null;
+      let msg = `Imported ${importResult.addedCount} systems from ${catNameBase}. Centering & rendering…`;
+      const rendered = systemsState.filter(hasFiniteCoords).length;
+      const missing = importResult.missingCoords;
+      msg =
+        `Rendered ${rendered} systems.` +
+        (missing > 0
+          ? ` Could not find coordinates for ${missing} system${
+              missing === 1 ? "" : "s"
+            }.`
+          : "");
+      setStatus(msg);
+      plot(com);
+    } catch (e) {
+      console.error(e);
+      setStatus("Error loading CSV: " + (e?.message || String(e)));
+    }
+    return true;
+  }
+  return false;
+}
+
+(async () => {
+  if (!(await tryAutoLoadCsvFromQuery())) {
+    plot(getCenterOfMass());
+  }
+})();
