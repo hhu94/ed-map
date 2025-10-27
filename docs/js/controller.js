@@ -13,17 +13,17 @@ async function importCsvText(text, catNameBase, catIdBase) {
     if (cols.length < 1) continue;
     const name = (cols[0] || "").replace(/(^[\"']|[\"']$)/g, "").trim();
     if (!name) continue;
-    let catId, catName;
+    let catId = catIdBase,
+      catName = catNameBase;
     if (cols.length >= 2) {
-      catName = cols[1].trim();
+      parsedCatName = cols[1].trim();
+      if (parsedCatName) {
+        catName = `${parsedCatName} (${catNameBase})`;
+      }
       if (catNameToId[catName] === undefined) {
         catNameToId[catName] = nextFileCatId++;
       }
       catId = catNameToId[catName];
-    }
-    if (catId === undefined) {
-      catId = catIdBase;
-      catName = catNameBase;
     }
     // Parse manual coordinates if present (cols 2,3,4)
     let coords = undefined;
