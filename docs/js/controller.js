@@ -386,7 +386,7 @@ async function tryAutoLoadCsvFromQuery() {
       if (!resp.ok) throw new Error(`Failed to fetch ${csvFile}`);
       const text = await resp.text();
       const catIdBase = nextFileCatId++;
-      const catNameBase = csvFile;
+      const catNameBase = csvFile || "URL";
       const importResult = await importCsvText(text, catNameBase, catIdBase);
       const com = getCenterOfMass();
       pendingCenterLabel = null;
