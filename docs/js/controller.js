@@ -369,11 +369,19 @@ window.addEventListener("message", (ev) => {
 async function tryAutoLoadCsvFromQuery() {
   const params = new URLSearchParams(window.location.search);
   const csvFile = params.get("load");
+  const csvFromUrl = params.get("loadUrl");
+  let url;
   if (csvFile && /^[\w\-.]+\.csv$/i.test(csvFile)) {
     setStatus(`Loading CSV: ${csvFile}…`);
+    // Load files from system-sets directory
+    url = `system-sets/${csvFile}`;
+  } else if (csvFromUrl && /^https?:\/\//i.test(csvFromUrl)) {
+    setStatus(`Loading CSV from URL: ${url}…`);
+    // Load from provided URL
+    url = csvFromUrl;
+  }
+  if (url) {
     try {
-      // Only allow files from system-sets directory
-      const url = `system-sets/${csvFile}`;
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`Failed to fetch ${csvFile}`);
       const text = await resp.text();
